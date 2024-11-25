@@ -23,13 +23,12 @@ class ProcessingError(Exception):
     pass
 
 class AccessLevel(Enum):
-    READ_ONLY = "read_only"
-    READ_WRITE = "read_write"
-    ADMIN = "admin"
+    READ_ONLY = 1
+    READ_WRITE = 2
+    ADMIN = 3
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class Item:
@@ -42,16 +41,16 @@ class Item:
         if not isinstance(data.get('item_id'), str) or not data['item_id']:
             raise ValidationError('item_id must be a non-empty string')
         
-        if not isinstance(data.get('quantity'), str) or data['quantity'] <= 0:
+        if not isinstance(data.get('quantity'), (int, float)) or data['quantity'] <= 0:
             raise ValidationError('quantity must be a positive integer')
         
         if not isinstance(data.get('price'), (int, float)) or data['price'] <= 0:
             raise ValidationError('price must be a positive number')
         
         return cls(
-            item_id = data['item_id'],
-            quantity = data['quantity'],
-            price= float(data['price'])
+            item_id=data['item_id'],
+            quantity=int(data['quantity']),
+            price=float(data['price'])
         )
 
 @dataclass
@@ -66,14 +65,14 @@ class Transaction:
         if not isinstance(data.get('user_id'), str) or not data['user_id']:
             raise ValidationError("user_id must be a non-empty string")
         
-        email_pattern = r'^[a-zA-Z0-9._%±]+@[a-zA-Z0-9.-]+.[a-zA-Z]{2,}$'
-        if not re.match(email_pattern, data.get('email','')):
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, data.get('email', '')):
             raise ValidationError('Invalid email format')
         
         try:
-            timestamp = datetime.fromisoformat(data['timestamp'].replace('Z','+00:00'))
+            timestamp = datetime.fromisoformat(data['timestamp'].replace('Z', '+00:00'))
         except (ValueError, TypeError):
-            raise ValidationError("timestamp must be in iso 8601 format")
+            raise ValidationError("timestamp must be in ISO 8601 format")
 
         if not isinstance(data.get('items'), list) or not data['items']:
             raise ValidationError('items must be a non-empty list')
@@ -81,12 +80,11 @@ class Transaction:
         items = [Item.from_dict(item) for item in data['items']]
 
         return cls(
-            user_id = data['user_id'],
+            user_id=data['user_id'],
             email=data['email'],
             timestamp=timestamp,
             items=items
         )    
-    
 
 class TokenManager:
     def __init__(self, secret_key: str):
@@ -94,8 +92,7 @@ class TokenManager:
         self.tokens = {}
         self.lock = Lock()
 
-    def generate_token(self, user_id: str, access_level: AccessLevel, expires_in: int = 3000) -> str:
-
+    def generate_token(self, user_id: str, access_level: AccessLevel, expires_in: int = 3600) -> str:
         """Generate a new token with specified access level and expiry"""   
         with self.lock:
             timestamp = int(time.time())
@@ -120,30 +117,28 @@ class TokenManager:
                 del self.tokens[token]
                 return False
 
-            return AccessLevel[access_level.upper()].value >= required_level.value    
+            return access_level.value >= required_level.value
 
 class DataProcessor:
     def __init__(self, chunk_size: int = 1000):
         self.chunk_size = chunk_size
-        self.process_lock = Lock()
 
     def chunk_data(self, data: List[Dict]) -> Generator[List[Dict], None, None]:
-        """Split data into manageble chunks"""
+        """Split data into manageable chunks"""
         for i in range(0, len(data), self.chunk_size):
             yield data[i:i + self.chunk_size]
-
 
     def process_chunk(self, chunk: List[Dict]) -> List[Transaction]:
         """Process a single chunk of data""" 
         try:
             return [Transaction.from_dict(item) for item in chunk]
         except Exception as e:
-            raise ProcessingError(f"Chunk processing faild: {str(e)}") 
+            raise ProcessingError(f"Chunk processing failed: {str(e)}") 
 
     def process_large_dataset(self, data: List[Dict],
-                              max_workers: int = None) -> Generator[List[Dict], None, None]:
-        """Process large Dataset"""     
-        with ProcessPoolExecutor(max_workers = max_workers) as executor:
+                            max_workers: int = None) -> Generator[Transaction, None, None]:
+        """Process large dataset"""     
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = []
             for chunk in self.chunk_data(data):
                 future = executor.submit(self.process_chunk, chunk)
@@ -151,14 +146,13 @@ class DataProcessor:
 
             for future in futures:
                 try:
-                    for transaction in future.result():
+                    result = future.result()
+                    for transaction in result:
                         yield transaction
                 except Exception as e:
-                    raise ProcessingError(f"Failed to process data chunk : {str(e)}")               
-
+                    raise ProcessingError(f"Failed to process data chunk: {str(e)}")
 
 def main():
-
     token_manager = TokenManager(secret_key="sample123")
     data_processor = DataProcessor(chunk_size=1000)
 
@@ -181,12 +175,12 @@ def main():
         )
 
         if not token_manager.verify_token(token, AccessLevel.READ_ONLY):
-            raise AuthorizationError("invalid token")
+            raise AuthorizationError("Invalid token")
         
-        process_data = list(data_processor.process_large_dataset(sample_data))
+        processed_data = list(data_processor.process_large_dataset(sample_data))
 
-        logger.info("Processing completed Sucessfully")
-        logger.info(f"Processed{len(process_data)} records")
+        logger.info("Processing completed successfully")
+        logger.info(f"Processed {len(processed_data)} records")
     except ValidationError as e:
         logger.error(f"Validation error: {str(e)}")
     except AuthorizationError as e:
@@ -194,7 +188,7 @@ def main():
     except ProcessingError as e:
         logger.error(f"Processing error: {str(e)}")
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")        
+        logger.error(f"Unexpected error: {str(e)}")
 
 if __name__ == "__main__":
-    main()        
+    main()
